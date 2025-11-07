@@ -62,7 +62,7 @@ def play(args):
     if args.web:
         web_viewer = webviewer.WebViewer()
     faulthandler.enable()
-    log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
+    log_pth = "/home/descfly/Lingyun/exbody2/legged_gym/logs/{}/".format(args.proj_name) + args.exptid
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     # override some parameters for testing

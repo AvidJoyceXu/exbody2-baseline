@@ -28,8 +28,8 @@
 
 import os
 
-from utils.config import set_np_formatting, set_seed, get_args, parse_sim_params, load_cfg
-from utils.parse_task import parse_task
+from exbody2_utils.config import set_np_formatting, set_seed, get_args, parse_sim_params, load_cfg
+from exbody2_utils.parse_task import parse_task
 
 from rl_games.algos_torch import players
 from rl_games.algos_torch import torch_ext

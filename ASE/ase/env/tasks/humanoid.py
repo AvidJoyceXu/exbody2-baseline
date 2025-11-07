@@ -34,7 +34,7 @@ from isaacgym import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
 
-from utils import torch_utils
+from exbody2_utils import torch_utils
 
 from env.tasks.base_task import BaseTask
 

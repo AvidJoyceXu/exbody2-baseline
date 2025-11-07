@@ -34,11 +34,11 @@ from isaacgym import gymapi
 from isaacgym import gymtorch
 
 from env.tasks.humanoid import Humanoid, dof_to_obs
-from utils import gym_util
-from utils.motion_lib import MotionLib
+from exbody2_utils import gym_util
+from exbody2_utils.motion_lib import MotionLib
 from isaacgym.torch_utils import *
 
-from utils import torch_utils
+from exbody2_utils import torch_utils
 
 class HumanoidAMP(Humanoid):
     class StateInit(Enum):

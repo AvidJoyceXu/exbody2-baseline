@@ -34,8 +34,8 @@ from isaacgym import gymtorch
 from env.tasks.humanoid_amp import HumanoidAMP
 from isaacgym.torch_utils import *
 
-from utils import torch_utils
-from utils import gym_util
+from exbody2_utils import torch_utils
+from exbody2_utils import gym_util
 
 
 class HumanoidAMPGetup(HumanoidAMP):

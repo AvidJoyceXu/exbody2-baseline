@@ -31,7 +31,7 @@ import torch
 import env.tasks.humanoid as humanoid
 import env.tasks.humanoid_amp as humanoid_amp
 import env.tasks.humanoid_amp_task as humanoid_amp_task
-from utils import torch_utils
+from exbody2_utils import torch_utils
 
 from isaacgym import gymapi
 from isaacgym import gymtorch

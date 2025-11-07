@@ -19,7 +19,7 @@ import time
 
 import sys
 sys.path.append(os.path.join(ASE_DIR, "ase"))
-sys.path.append(os.path.join(ASE_DIR, "ase/utils"))
+sys.path.append(os.path.join(ASE_DIR, "ase/exbody2_utils"))
 import cv2
 
 from motion_lib import MotionLib

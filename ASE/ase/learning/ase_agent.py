@@ -34,7 +34,7 @@ from rl_games.algos_torch import torch_ext
 from rl_games.common import a2c_common
 from rl_games.algos_torch.running_mean_std import RunningMeanStd
 
-from utils import torch_utils
+from exbody2_utils import torch_utils
 from learning import ase_network_builder
 
 class ASEAgent(amp_agent.AMPAgent):
