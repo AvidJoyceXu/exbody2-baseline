@@ -28,46 +28,30 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-import os
+import torch
+from torch import Tensor
+import numpy as np
+from humanoidverse.utils.torch_utils import quat_apply, normalize
+from typing import Tuple
 
-from legged_gym.envs import *
-from legged_gym.utils import get_args, task_registry
-import wandb
+# xyzw
+# @ torch.jit.script
+def quat_apply_yaw(quat, vec):
+    quat_yaw = quat.clone().view(-1, 4)
+    quat_yaw[:, :2] = 0.
+    quat_yaw = normalize(quat_yaw)
+    return quat_apply(quat_yaw, vec)
 
-def train(args):
-    args.headless = True
-    log_pth = LEGGED_GYM_ROOT_DIR + "/logs/{}/".format(args.proj_name) + args.exptid
-    try:
-        os.makedirs(log_pth)
-    except:
-        pass
-    if args.debug:
-        mode = "disabled"
-        args.rows = 10
-        args.cols = 5
-        args.num_envs = 64
-    else:
-        mode = "online"
-    
-    if args.no_wandb:
-        mode = "disabled"
-    wandb.init(project=args.proj_name, name=args.exptid, entity=args.entity, mode=mode, dir="../../logs")
-    wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py", policy="now")
-    wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
-    # Save config files based on task
-    if "x2" in args.task:
-        wandb.save(LEGGED_GYM_ENVS_DIR + "/x2/x2_mimic_priv_config.py", policy="now")
-        wandb.save(LEGGED_GYM_ENVS_DIR + "/x2/x2_mimic_priv.py", policy="now")
-    elif "g1" in args.task:
-        wandb.save(LEGGED_GYM_ENVS_DIR + "/g1/g1_mimic_priv_config.py", policy="now")
-        wandb.save(LEGGED_GYM_ENVS_DIR + "/g1/g1_mimic_priv.py", policy="now")
-        wandb.save(LEGGED_GYM_ENVS_DIR + "/g1/g1_mimic_priv_distill.py", policy="now")
+# @ torch.jit.script
+def wrap_to_pi(angles):
+    angles %= 2*np.pi
+    angles -= 2*np.pi * (angles > np.pi)
+    return angles
 
-    env, env_cfg = task_registry.make_env(name=args.task, args=args)
-    ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
-    ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
-
-if __name__ == '__main__':
-    # Log configs immediately
-    args = get_args()
-    train(args)
+# @ torch.jit.script
+def torch_rand_sqrt_float(lower, upper, shape, device):
+    # type: (float, float, Tuple[int, int], str) -> Tensor
+    r = 2*torch.rand(*shape, device=device) - 1
+    r = torch.where(r<0., -torch.sqrt(-r), torch.sqrt(r))
+    r =  (r + 1.) / 2.
+    return (upper - lower) * r + lower

@@ -962,12 +962,25 @@ class LeggedRobot(BaseTask):
         asset_options.thickness = self.cfg.asset.thickness
         asset_options.disable_gravity = self.cfg.asset.disable_gravity
 
+        # Workaround for Isaac Gym hang after Euler warning
+        # Add GPU synchronization before asset loading
+        if self.device != 'cpu':
+            import torch
+            torch.cuda.synchronize()
+        
         robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        
+        # Add GPU synchronization after first asset load
+        if self.device != 'cpu':
+            torch.cuda.synchronize()
+        
         urdf_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        
+        # Add GPU synchronization after second asset load
+        if self.device != 'cpu':
+            torch.cuda.synchronize()
+        
         dof_props_asset = self.gym.get_asset_dof_properties(urdf_asset)
-
-        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
         # dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
         dof_props_asset["lower"][[0, 6]] = -1#urdf_props["lower"][:]
         dof_props_asset["upper"][[0, 6]] = 1#urdf_props["upper"][:]
@@ -977,9 +990,10 @@ class LeggedRobot(BaseTask):
         # dof_props_asset["effort"][:] = urdf_props["effort"][:]
         # dof_props_asset["hasLimits"][:] = True
 
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
+        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
 
-        # save body names from the asset
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
         body_names = self.gym.get_asset_rigid_body_names(robot_asset)
         print("Body names: ", body_names)
         self.dof_names = self.gym.get_asset_dof_names(robot_asset)
