@@ -34,7 +34,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 
 class X2MimicPrivCfg( LeggedRobotCfg ):
     class env( LeggedRobotCfg.env ):
-        num_envs = 4096
+        num_envs = 1024
 
         n_demo_steps = 2
         n_demo = 19 + 3 + 3 + 3 + 12*3  #observe height

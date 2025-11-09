@@ -86,48 +86,37 @@ class X2MimicPriv(LeggedRobot):
         # 'waist_yaw_link', 'waist_roll_link', 'torso_link',
         # 'left_shoulder_pitch_link', 'left_shoulder_roll_link', 'left_shoulder_yaw_link', 'left_elbow_link', 'left_rubber_hand', 
         # 'right_shoulder_pitch_link', 'right_shoulder_roll_link', 'right_shoulder_yaw_link', 'right_elbow_link', 'right_rubber_hand']
-        self._key_body_ids_sim = torch.tensor([1, 4, 5, # Left Hip yaw, Knee, Ankle
-                                               7, 10, 11,
-                                               16, 19, 20, # Left Shoulder pitch, Elbow, hand
-                                               21, 24, 25], device=self.device)
-        # self._key_body_ids_sim_subset = torch.tensor([6, 7, 8, 9, 10, 11], device=self.device)  # no knee and ankle
-        self._key_body_ids_sim_subset = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], device=self.device)  # no ankle
+        # Actual body indices in simulation (0-23, total 24 bodies)
+        # Body list: ['pelvis', 'left_hip_pitch_link', 'left_hip_roll_link', 'left_hip_yaw_link', 'left_knee_link', 
+        #              'left_ankle_pitch_link', 'left_ankle_roll_link', 'right_hip_pitch_link', 'right_hip_roll_link', 
+        #              'right_hip_yaw_link', 'right_knee_link', 'right_ankle_pitch_link', 'right_ankle_roll_link', 
+        #              'waist_yaw_link', 'waist_pitch_link', 'waist_roll_link', 'left_shoulder_pitch_link', 
+        #              'left_shoulder_roll_link', 'left_shoulder_yaw_link', 'left_elbow_pitch_link', 
+        #              'right_shoulder_pitch_link', 'right_shoulder_roll_link', 'right_shoulder_yaw_link', 'right_elbow_pitch_link']
+        # Key bodies: Left Hip yaw(3), Knee(4), Ankle(5,6), Right Hip yaw(9), Knee(10), Ankle(11,12),
+        #             Left Shoulder pitch(16), Elbow(19), Right Shoulder pitch(20), Roll(21), Yaw(22), Elbow(23)
+        # Note: Removed indices 24, 25 as they don't exist (only 24 bodies, indices 0-23)
+        self._key_body_ids_sim = torch.tensor([3, 4, 5,  # Left Hip yaw, Knee, Ankle pitch
+                                               9, 10, 11, # Right Hip yaw, Knee, Ankle pitch  
+                                               16, 19,    # Left Shoulder pitch, Elbow
+                                               20, 21, 23], device=self.device)  # Right Shoulder pitch, Roll, Elbow
+        # _key_body_ids_sim_subset: indices into _key_body_ids_sim (11 bodies total)
+        # Select all 11 key bodies: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        self._key_body_ids_sim_subset = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], device=self.device)
         
         self._num_key_bodies = len(self._key_body_ids_sim_subset)
 
-        # ['left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint', 
-        # 'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint', 
-        # 'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint', 
-        # 'right_knee_joint', 'right_ankle_pitch_joint', 'right_ankle_roll_joint', 
-        # 'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint', 
-        # 'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 'left_elbow_joint', 
-        # 'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 'right_elbow_joint']
-        self.dof_indices_sim = torch.tensor(   [0, 1, 2,  4, 5,  6, 7, 8,  10, 11,  12, 13, 14,  15, 16, 17,  20, 21, 22], device=self.device, dtype=torch.long)
-        
-        self._dof_ids_subset = torch.tensor([0, 1, 2, 3, 6, 7, 8, 9,
-                                             12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22], device=self.device)  # wholebody
-
+        # Define DOF subset for demo observations
+        # X2 has 23 DOFs total, use all of them for demo
+        self._dof_ids_subset = torch.arange(23, device=self.device, dtype=torch.long)
         self._n_demo_dof = len(self._dof_ids_subset)
 
         # exbody2
-        self._dof_body_ids = [1, 2, 3, # Hip, Knee, Ankle
-                              4, 5, 6,
-                              7,       # Torso
-                              8, 9, 10, # Shoulder, Elbow, Hand
-                              11, 12, 13]  # 13
-
-        self._dof_offsets = [0, 3, 4, 6, 9, 10, 12, 
-                             15, 
-                             18, 19, 20, 23, 24, 25]  # 14
-
-        self._valid_dof_body_ids = torch.ones(len(self._dof_body_ids)+2*6, device=self.device, dtype=torch.bool)
-        self._valid_dof_body_ids[-1] = 0
-        self._valid_dof_body_ids[-6] = 0
-        self.dof_indices_motion = torch.tensor([1, 0, 2,  4, 5,  7, 6, 8,  10, 11,  14, 12, 13,  16, 15, 17,  21, 20, 22], device=self.device, dtype=torch.long)
-
-        # # NOTE: motion folder is hardcoded
-        # motion_folder = "/home/descfly/Lingyun/exbody2/x2_t2_23dof_retarget_motion_dynamic_adjust"
-    
+        # _dof_body_ids: List of body IDs (13 elements) that correspond to body parts with DOFs.
+        # These are used with _dof_offsets to map DOFs to body parts in the motion library.
+        # Each body ID corresponds to a body part in the robot skeleton.
+        # Structure: [left_hip(3), right_hip(3), waist(1), left_shoulder(3), left_elbow(1), right_shoulder(3), right_elbow(1)]
+        # Total: 3+3+1+3+1+3+1 = 15 body IDs, but grouped into 13 body parts
         
         self._load_motion(cfg, cfg.motion.no_keybody)
 
@@ -279,6 +268,7 @@ class X2MimicPriv(LeggedRobot):
         root_vel = motion_state['root_vel']
         root_ang_vel = motion_state['root_ang_vel']
         dof_vel = motion_state['dof_vel']
+        
         # Get key body positions from rg_pos (all body positions)
         # _key_body_ids_sim contains the actual body indices we want
         key_pos = motion_state['rg_pos'][:, self._key_body_ids_sim.cpu().numpy()]
@@ -632,9 +622,13 @@ class X2MimicPriv(LeggedRobot):
     ######### utils #########
     
     def reindex_dof_pos_vel(self, dof_pos, dof_vel):
-        dof_pos = reindex_motion_dof(dof_pos, self.dof_indices_sim, self.dof_indices_motion, self._valid_dof_body_ids)
-        dof_vel = reindex_motion_dof(dof_vel, self.dof_indices_sim, self.dof_indices_motion, self._valid_dof_body_ids)
+        '''
+        NOTE: temporarily disabled to avoid OOB errors
+        '''
         return dof_pos, dof_vel
+    #     dof_pos = reindex_motion_dof(dof_pos, self.dof_indices_sim, self.dof_indices_motion, self._valid_dof_body_ids)
+    #     dof_vel = reindex_motion_dof(dof_vel, self.dof_indices_sim, self.dof_indices_motion, self._valid_dof_body_ids)
+    #     return dof_pos, dof_vel
 
     def draw_rigid_bodies_demo(self, ):
         geom = gymutil.WireframeSphereGeometry(0.06, 32, 32, None, color=(0, 1, 0))
@@ -870,12 +864,6 @@ def build_demo_observations(root_pos, root_rot, root_vel, root_ang_vel, dof_pos,
     local_root_vel = quat_rotate_inverse(root_rot, root_vel)
     roll, pitch, yaw = euler_from_quaternion(root_rot)
     return torch.cat((dof_pos, local_root_vel, local_root_ang_vel, roll[:, None], pitch[:, None], root_pos[:, 2:3], local_key_body_pos.view(local_key_body_pos.shape[0], -1)), dim=-1)
-
-@torch.jit.script
-def reindex_motion_dof(dof, indices_sim, indices_motion, valid_dof_body_ids):
-    dof = dof.clone()
-    dof[:, indices_sim] = dof[:, indices_motion]
-    return dof[:, valid_dof_body_ids]
 
 @torch.jit.script
 def local_to_global(quat, rigid_body_pos, root_pos):
