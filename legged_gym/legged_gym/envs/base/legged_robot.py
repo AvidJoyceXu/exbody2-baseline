@@ -644,8 +644,7 @@ class LeggedRobot(BaseTask):
         """
         # base position
         if self.custom_origins:
-            # Properly broadcast base_init_state to match env_ids shape
-            self.root_states[env_ids] = self.base_init_state.unsqueeze(0).expand(len(env_ids), -1)
+            self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
             if self.cfg.env.randomize_start_pos:
                 self.root_states[env_ids, :2] += torch_rand_float(-0.3, 0.3, (len(env_ids), 2), device=self.device) # xy position within 1m of the center
@@ -668,8 +667,7 @@ class LeggedRobot(BaseTask):
                 # root_height[root_height < self.base_init_state[2]] = self.base_init_state[2]
                 self.root_states[env_ids, 2] = root_height[:] + 0.3
         else:
-            # Properly broadcast base_init_state to match env_ids shape
-            self.root_states[env_ids] = self.base_init_state.unsqueeze(0).expand(len(env_ids), -1)
+            self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,

@@ -37,7 +37,7 @@ class X2MimicPrivCfg( LeggedRobotCfg ):
         num_envs = 1024
 
         n_demo_steps = 2
-        n_demo = 19 + 3 + 3 + 3 + 12*3  #observe height
+        n_demo = 23 + 3 + 3 + 3 + 11*3  #observe height: 23 DOFs + 3 vel + 3 ang_vel + 3 (roll, pitch, height) + 11 key bodies * 3
         interval_demo_steps = 0.1
 
         n_scan = 0#132
@@ -51,7 +51,7 @@ class X2MimicPrivCfg( LeggedRobotCfg ):
         prop_hist_len = 4
         n_feature = prop_hist_len * n_proprio
 
-        n_teacher_priv = 75
+        n_teacher_priv = 11*3 + 11*3 + 3  # key_body_diff (11 bodies * 3) + cur_local_key_body_pos (11 bodies * 3) + base_lin_vel (3) = 69
 
         num_observations = n_feature + n_proprio + n_teacher_priv + n_demo + history_len*n_proprio + n_priv_latent + n_priv
 

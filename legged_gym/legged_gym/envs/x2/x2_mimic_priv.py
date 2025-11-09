@@ -118,6 +118,11 @@ class X2MimicPriv(LeggedRobot):
         # Structure: [left_hip(3), right_hip(3), waist(1), left_shoulder(3), left_elbow(1), right_shoulder(3), right_elbow(1)]
         # Total: 3+3+1+3+1+3+1 = 15 body IDs, but grouped into 13 body parts
         
+        # Initialize _dof_offsets (not used in build_demo_observations but required for function call)
+        # X2 has 23 DOFs: left_leg(6), right_leg(6), waist(3), left_arm(4), right_arm(4)
+        # For X2, we use all 23 DOFs, so offsets are: [0, 6, 12, 15, 19, 23]
+        self._dof_offsets = [0, 6, 12, 15, 19, 23]
+        
         self._load_motion(cfg, cfg.motion.no_keybody)
 
     def init_motion_buffers(self, cfg):
@@ -427,15 +432,16 @@ class X2MimicPriv(LeggedRobot):
         # Get key body positions from rg_pos
         # key_pos should be for _key_body_ids (4 main key bodies: [3, 6, 9, 12])
         key_pos = motion_state['rg_pos'][:, self._key_body_ids.cpu().numpy()]  # [num_samples, 4, 3]
-        # Also get positions for _key_body_ids_sim (12 bodies) for local conversion
-        key_pos_sim = motion_state['rg_pos'][:, self._key_body_ids_sim.cpu().numpy()]  # [num_samples, 12, 3]
-        # Convert global key body positions to local for the 12 bodies
+        # Also get positions for _key_body_ids_sim (11 bodies) for local conversion
+        key_pos_sim = motion_state['rg_pos'][:, self._key_body_ids_sim.cpu().numpy()]  # [num_samples, 11, 3]
+        # Convert global key body positions to local for the 11 bodies
         num_samples = root_pos.shape[0]
+        # global_to_local expects quat to be [num_envs, 4] - it will expand internally
         local_key_body_pos = global_to_local(
-            root_rot.unsqueeze(1).expand(-1, len(self._key_body_ids_sim), -1).reshape(-1, 4),
-            key_pos_sim.reshape(-1, 3),
-            root_pos.unsqueeze(1).expand(-1, len(self._key_body_ids_sim), -1).reshape(-1, 3)
-        ).reshape(num_samples, len(self._key_body_ids_sim), 3)
+            root_rot,  # [num_samples, 4] - function will expand to [num_samples, num_key_bodies, 4] internally
+            key_pos_sim,  # [num_samples, num_key_bodies, 3]
+            root_pos[:, :3]  # [num_samples, 3] - root_pos for each sample
+        )  # Returns [num_samples, num_key_bodies, 3]
         # Now select subset using _key_body_ids_sim_subset (which are indices into _key_body_ids_sim)
         local_key_body_pos = local_key_body_pos[:, self._key_body_ids_sim_subset.cpu().numpy(), :]
         dof_pos, dof_vel = self.reindex_dof_pos_vel(dof_pos, dof_vel)
