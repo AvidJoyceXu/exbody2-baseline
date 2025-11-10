@@ -349,6 +349,9 @@ class Terrain:
             env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2])*terrain.vertical_scale
         self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
         self.terrain_type[i, j] = terrain.idx
+        # Ensure terrain has goals attribute, create default if missing
+        if not hasattr(terrain, 'goals') or terrain.goals is None:
+            terrain.goals = np.zeros((self.cfg.num_goals, 2))
         self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
         # self.env_slope_vec[i, j] = terrain.slope_vector
 

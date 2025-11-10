@@ -1124,6 +1124,19 @@ class LeggedRobot(BaseTask):
             self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
             self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
             self.env_origins[:, 2] = 0.
+            
+            # Initialize goal-related buffers for plane terrain (even if not used)
+            if hasattr(self.cfg.terrain, 'num_goals') and self.cfg.terrain.num_goals > 0:
+                self.terrain_goals = torch.zeros(1, 1, self.cfg.terrain.num_goals, 3, device=self.device, requires_grad=False)
+                self.env_goals = torch.zeros(self.num_envs, self.cfg.terrain.num_goals + self.cfg.env.num_future_goal_obs, 3, device=self.device, requires_grad=False)
+            else:
+                # Create dummy goals if num_goals not specified
+                self.terrain_goals = torch.zeros(1, 1, 1, 3, device=self.device, requires_grad=False)
+                self.env_goals = torch.zeros(self.num_envs, 1 + self.cfg.env.num_future_goal_obs, 3, device=self.device, requires_grad=False)
+            self.cur_goal_idx = torch.zeros(self.num_envs, device=self.device, requires_grad=False, dtype=torch.long)
+            self.reach_goal_timer = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
+            self.cur_goals = self._gather_cur_goals()
+            self.next_goals = self._gather_cur_goals(future=1)
 
     def _parse_cfg(self, cfg):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
