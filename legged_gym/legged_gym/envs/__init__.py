@@ -43,6 +43,7 @@ from .g1.g1_mimic_priv_distill import G1MimicPrivDistill
 
 from .x2.x2_mimic_priv import X2MimicPriv
 from .x2.x2_mimic_priv_config import X2MimicPrivCfg, X2MimicPrivCfgPPO, X2MimicPrivDistillCfgPPO
+from .x2.x2_mimic_priv_distill import X2MimicPrivDistill
 
 from legged_gym.utils.task_registry import task_registry
 
@@ -55,4 +56,5 @@ task_registry.register( "g1_mimic_priv_eval", G1MimicPrivEval, G1MimicPrivCfg(),
 task_registry.register( "g1_mimic_priv_distill", G1MimicPrivDistill, G1MimicPrivCfg(), G1MimicPrivDistillCfgPPO() )
 
 task_registry.register( "x2_mimic_priv", X2MimicPriv, X2MimicPrivCfg(), X2MimicPrivCfgPPO() )
+task_registry.register( "x2_mimic_priv_distill", X2MimicPrivDistill, X2MimicPrivCfg(), X2MimicPrivDistillCfgPPO() )
 
