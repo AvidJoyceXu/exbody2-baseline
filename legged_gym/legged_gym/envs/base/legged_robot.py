@@ -297,7 +297,8 @@ class LeggedRobot(BaseTask):
         height_cutoff = self.root_states[:, 2] < 0.5
 
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
-        self.time_out_buf |= reach_goal_cutoff
+        # NOTE - Lingyun(25/11/11): disable goal_reach buf.
+        # self.time_out_buf |= reach_goal_cutoff
 
         self.reset_buf |= self.time_out_buf
         # self.reset_buf |= roll_cutoff

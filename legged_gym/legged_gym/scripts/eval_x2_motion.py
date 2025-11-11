@@ -161,20 +161,14 @@ class MotionEvaluator:
         
         return min_pos_error, min_vel_error
     
-    def check_success(self, env_ids, pos_error):
-        """Check if episode is successful: not fallen and position error < 0.2m"""
-        # Check if robot has fallen (height < threshold)
-        height = self.env.root_states[env_ids, 2]
-        not_fallen = height > 0.2  # Same threshold as in check_termination
-        
-        # Check position error
-        pos_ok = pos_error < 0.2
-        
-        success = not_fallen & pos_ok
-        return success.cpu() if isinstance(success, torch.Tensor) else success
-    
     def evaluate_single_motion(self, motion_name, num_episodes=10, episode_length_s=30):
-        """Evaluate a single motion without switching"""
+        """Evaluate a single motion without switching
+        
+        Requirements:
+        1. Each motion plays to completion (even if falling occurs, continue until episode/dt > motion_len)
+        2. Track if any frame has motion_far (window error > 0.2m) or falling. Episode is success if neither occurs.
+        3. Accumulate joint pos/vel errors across all frames, averaged by total frame count across motions.
+        """
         print(f"Evaluating single motion: {motion_name}")
         
         # Initialize metrics for this motion if not already done
@@ -190,7 +184,7 @@ class MotionEvaluator:
             keys_list = motion_keys.tolist()
         
         print(f"  Searching for motion '{motion_name}' in {len(keys_list)} motion keys...")
-        print(f"  First few keys: {keys_list[:5]}")
+        print(f"  Keys list: {keys_list}")
         
         for i, key in enumerate(keys_list):
             # Try multiple matching strategies
@@ -206,11 +200,12 @@ class MotionEvaluator:
             print(f"  Available keys (first 10): {keys_list[:10]}")
             return
         
-        episode_count = 0
-        step_count = 0
-        max_steps = int(episode_length_s / self.env.dt)
+        # Get motion length
+        motion_len = self.env._motion_lib.get_motion_length(torch.tensor([motion_id], device=self.device)).item()
+        max_steps = int(motion_len / self.env.dt) + 1  # Add 1 to ensure we complete the motion
         
-        print(f"  Running {num_episodes} episodes, max {max_steps} steps per episode")
+        print(f"  Motion length: {motion_len:.2f}s, max steps: {max_steps}")
+        print(f"  Running {num_episodes} episodes")
         
         # Reset environment with specific motion
         env_ids = torch.arange(self.env.num_envs, device=self.device)
@@ -219,55 +214,80 @@ class MotionEvaluator:
         self.env.reset_idx(env_ids)
         obs = self.env.get_observations()
         
+        # Track episode state for each environment
+        episode_step_count = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)  # Steps since reset
+        episode_failed = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Has failed (fall or motion_far)
+        episode_completed = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Motion completed
+        episode_should_reset = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Should reset after completion
+        
         print(f"  Starting evaluation loop...")
+        
+        episode_count = 0
         
         while episode_count < num_episodes:
             # Run policy
             actions = self.policy(obs, hist_encoding=True)
             
-            obs, _, _, dones, _ = self.env.step(actions.detach())
+            # Step environment
+            obs, _, _, _, _ = self.env.step(actions.detach())
             
-            # Compute metrics for non-reset environments
-            active_envs = ~dones
-            if active_envs.any() and step_count > self.window_length:  # Wait for window to be valid
+            # Increment episode step count for all non-reset episodes
+            active_mask = ~episode_should_reset
+            episode_step_count[active_mask] += 1
+            
+            # Compute metrics BEFORE checking completion (to include the completion frame)
+            # Compute for all environments that haven't been reset yet
+            # Only compute after window_length steps to ensure valid window
+            active_envs = active_mask & (episode_step_count > self.window_length)
+            if active_envs.any():
                 active_env_ids = env_ids[active_envs]
                 pos_error, vel_error = self.compute_window_errors(active_env_ids)
                 if pos_error is not None:
-                    success = self.check_success(active_env_ids, pos_error)
+                    # Check for motion_far (window error > 0.2m)
+                    motion_far_mask = pos_error > 0.2
+                    episode_failed[active_env_ids[motion_far_mask]] = True
                     
+                    # Accumulate errors for all frames
                     for i, env_idx in enumerate(active_env_ids):
                         self.metrics['single_motion'][motion_name]['mpbpe'].append(pos_error[i].item())
                         self.metrics['single_motion'][motion_name]['mpbve'].append(vel_error[i].item())
             
-            # Check for resets
-            reset_envs = dones.nonzero(as_tuple=False).flatten()
+            # Check if motion is completed (episode_time >= motion_len)
+            # Do this AFTER computing errors to include the completion frame
+            episode_time = episode_step_count * self.env.dt
+            motion_completed_mask = (episode_time >= motion_len) & ~episode_completed
+            
+            if motion_completed_mask.any():
+                episode_completed[motion_completed_mask] = True
+                # Mark for reset in next iteration
+                episode_should_reset[motion_completed_mask] = True
+            
+            # Check for failures (falling) - but don't reset yet
+            height = self.env.root_states[:, 2]
+            fall_mask = height < 0.2
+            episode_failed[fall_mask] = True
+            
+            # Handle resets: only reset when motion is completed
+            reset_envs = episode_should_reset.nonzero(as_tuple=False).flatten()
             if len(reset_envs) > 0:
                 for env_idx in reset_envs:
-                    # Check if episode was successful before reset
-                    if not self.episode_failed[env_idx]:
+                    # Check if episode was successful (no failure during entire motion)
+                    if not episode_failed[env_idx]:
                         self.metrics['single_motion'][motion_name]['success'] += 1
                     self.metrics['single_motion'][motion_name]['total'] += 1
                     episode_count += 1
-                    if episode_count % 5 == 0:
-                        print(f"  Completed {episode_count}/{num_episodes} episodes")
                 
-                # Reset failed flag
-                self.episode_failed[reset_envs] = False
+                # Reset episode tracking
+                episode_step_count[reset_envs] = 0
+                episode_failed[reset_envs] = False
+                episode_completed[reset_envs] = False
+                episode_should_reset[reset_envs] = False
                 
-                # Reset with same motion
+                # Reset environment with same motion
                 self.env._motion_ids[reset_envs] = motion_id
                 self.env.update_motion_ids(reset_envs)
                 self.env.reset_idx(reset_envs)
-            
-            # Check for failures (falling)
-            height = self.env.root_states[:, 2]
-            self.episode_failed = self.episode_failed | (height < 0.2)
-            
-            step_count += 1
-            if step_count >= max_steps:
-                # Timeout - count remaining episodes as incomplete
-                print(f"  Timeout reached at step {step_count}, completed {episode_count}/{num_episodes} episodes")
-                break
+                obs = self.env.get_observations()
         
         # Final summary for this motion
         final_data = self.metrics['single_motion'][motion_name]
@@ -347,7 +367,6 @@ class MotionEvaluator:
                     active_env_ids = env_ids[active_envs]
                     pos_error, vel_error = self.compute_window_errors(active_env_ids)
                     if pos_error is not None:
-                        success = self.check_success(active_env_ids, pos_error)
                         
                         for i, env_idx in enumerate(active_env_ids):
                             self.metrics['motion_switch'][switch_key]['mpbpe'].append(pos_error[i].item())
