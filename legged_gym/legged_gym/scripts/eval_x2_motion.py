@@ -294,8 +294,15 @@ class MotionEvaluator:
         print(f"  Completed evaluation: {final_data['total']} episodes, {final_data['success']} successful, "
               f"{len(final_data['mpbpe'])} error measurements")
     
-    def evaluate_motion_switch(self, motion1_name, motion2_name, num_episodes=10, switch_time_s=5.0):
-        """Evaluate motion switching from motion1 to motion2"""
+    def evaluate_motion_switch(self, motion1_name, motion2_name, num_episodes=10, switch_probability=0.02):
+        """Evaluate motion switching from motion1 to motion2
+        
+        Requirements:
+        1. Switch timing is sampled probabilistically with switch_probability=0.02 per step
+        2. After switching, motion2 plays to completion (even if falling occurs)
+        3. Track if any frame has motion_far (window error > 0.2m) or falling. Episode is success if neither occurs.
+        4. Accumulate joint pos/vel errors across all frames after switching.
+        """
         print(f"Evaluating motion switch: {motion1_name} -> {motion2_name}")
         
         switch_key = f"{motion1_name}->{motion2_name}"
@@ -326,10 +333,9 @@ class MotionEvaluator:
         
         print(f"  Found motion1_id={motion1_id}, motion2_id={motion2_id}")
         
-        switch_step = int(switch_time_s / self.env.dt)
-        
-        episode_count = 0
-        step_count = 0
+        # Get motion2 length
+        motion2_len = self.env._motion_lib.get_motion_length(torch.tensor([motion2_id], device=self.device)).item()
+        print(f"  Motion2 length: {motion2_len:.2f}s, switch_probability: {switch_probability}")
         
         # Reset environment with motion1
         env_ids = torch.arange(self.env.num_envs, device=self.device)
@@ -338,66 +344,113 @@ class MotionEvaluator:
         self.env.reset_idx(env_ids)
         obs = self.env.get_observations()
         
-        switched = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)
+        # Track episode state for each environment
+        episode_step_count = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)  # Steps since reset
+        episode_failed = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Has failed (fall or motion_far)
+        switched = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Has switched to motion2
+        switch_step_count = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.long)  # Steps since switch
+        motion2_completed = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Motion2 completed
+        episode_should_reset = torch.zeros(self.env.num_envs, device=self.device, dtype=torch.bool)  # Should reset after completion
+        
+        print(f"  Starting evaluation loop...")
+        
+        episode_count = 0
         
         while episode_count < num_episodes:
-            # Switch motion at specified time
-            if step_count == switch_step:
-                switch_mask = ~switched
-                if switch_mask.any():
-                    self.env._motion_ids[switch_mask] = motion2_id
-                    self.env.update_motion_ids(switch_mask)
-                    switched[switch_mask] = True
-                    
-                    # Record switch info
-                    for env_idx in env_ids[switch_mask]:
-                        if env_idx.item() not in self.switch_info:
-                            self.switch_info[env_idx.item()] = []
-                        self.switch_info[env_idx.item()].append((motion1_id, motion2_id, step_count))
-            
             # Run policy
             actions = self.policy(obs, hist_encoding=True)
             
-            obs, _, _, dones, _ = self.env.step(actions.detach())
+            # Step environment
+            obs, _, _, _, _ = self.env.step(actions.detach())
             
-            # Compute metrics after switch (wait for window to be valid)
-            if step_count >= switch_step + self.window_length:
-                active_envs = switched & ~dones
-                if active_envs.any():
-                    active_env_ids = env_ids[active_envs]
-                    pos_error, vel_error = self.compute_window_errors(active_env_ids)
-                    if pos_error is not None:
-                        
-                        for i, env_idx in enumerate(active_env_ids):
-                            self.metrics['motion_switch'][switch_key]['mpbpe'].append(pos_error[i].item())
-                            self.metrics['motion_switch'][switch_key]['mpbve'].append(vel_error[i].item())
+            # Increment episode step count for all non-reset episodes
+            active_mask = ~episode_should_reset
+            episode_step_count[active_mask] += 1
             
-            # Check for resets
-            reset_envs = dones.nonzero(as_tuple=False).flatten()
+            # Switch motion probabilistically (before switching)
+            # Reference: switch_mask in motion_switching_eval.py
+            switch_mask = (torch.rand(self.env.num_envs, device=self.device) < switch_probability) \
+                         * (~switched) \
+                         * (episode_step_count > 1) \
+                         * active_mask
+            
+            if switch_mask.any():
+                # Switch to motion2
+                self.env._motion_ids[switch_mask] = motion2_id
+                self.env.update_motion_ids(switch_mask)
+                # Reset motion_times to 0 to start motion2 from the beginning
+                self.env._motion_times[switch_mask] = 0.0
+                switched[switch_mask] = True
+                switch_step_count[switch_mask] = 0  # Reset switch step count
+                
+                # Record switch info
+                for env_idx in env_ids[switch_mask]:
+                    if env_idx.item() not in self.switch_info:
+                        self.switch_info[env_idx.item()] = []
+                    self.switch_info[env_idx.item()].append((motion1_id, motion2_id, episode_step_count[env_idx].item()))
+            
+            # Increment switch step count for switched environments
+            switch_step_count[switched & active_mask] += 1
+            
+            # Compute metrics BEFORE checking completion (to include the completion frame)
+            # Only compute after window_length steps
+            compute_mask = active_mask & (switch_step_count > self.window_length)
+            if compute_mask.any():
+                active_env_ids = env_ids[compute_mask]
+                pos_error, vel_error = self.compute_window_errors(active_env_ids)
+                if pos_error is not None:
+                    # Check for motion_far (window error > 0.2m)
+                    motion_far_mask = pos_error > 0.2
+                    episode_failed[active_env_ids[motion_far_mask]] = True
+                    
+                    # Accumulate errors for all frames after switching
+                    for i, env_idx in enumerate(active_env_ids):
+                        self.metrics['motion_switch'][switch_key]['mpbpe'].append(pos_error[i].item())
+                        self.metrics['motion_switch'][switch_key]['mpbve'].append(vel_error[i].item())
+            
+            # Check if motion2 is completed (switch_time >= motion2_len)
+            # Do this AFTER computing errors to include the completion frame
+            switch_time = switch_step_count * self.env.dt
+            motion2_completed_mask = (switch_time >= motion2_len) & switched & ~motion2_completed
+            
+            if motion2_completed_mask.any():
+                motion2_completed[motion2_completed_mask] = True
+                # Mark for reset in next iteration
+                episode_should_reset[motion2_completed_mask] = True
+            
+            # Check for failures (falling) - but don't reset yet
+            height = self.env.root_states[:, 2]
+            fall_mask = (height < 0.2)
+            episode_failed[fall_mask] = True
+            
+            # Handle resets: only reset when motion2 is completed
+            reset_envs = episode_should_reset.nonzero(as_tuple=False).flatten()
             if len(reset_envs) > 0:
                 for env_idx in reset_envs:
-                    if switched[env_idx]:
-                        # Check if episode was successful before reset
-                        if not self.episode_failed[env_idx]:
-                            self.metrics['motion_switch'][switch_key]['success'] += 1
-                        self.metrics['motion_switch'][switch_key]['total'] += 1
-                        episode_count += 1
+                    # Check if episode was successful (no failure during entire motion2)
+                    if not episode_failed[env_idx]:
+                        self.metrics['motion_switch'][switch_key]['success'] += 1
+                    self.metrics['motion_switch'][switch_key]['total'] += 1
+                    episode_count += 1
                 
-                # Reset failed flag and switched flag
-                self.episode_failed[reset_envs] = False
+                # Reset episode tracking
+                episode_step_count[reset_envs] = 0
+                episode_failed[reset_envs] = False
                 switched[reset_envs] = False
+                switch_step_count[reset_envs] = 0
+                motion2_completed[reset_envs] = False
+                episode_should_reset[reset_envs] = False
                 
                 # Reset with motion1
                 self.env._motion_ids[reset_envs] = motion1_id
                 self.env.update_motion_ids(reset_envs)
                 self.env.reset_idx(reset_envs)
-                step_count = -1  # Will be incremented to 0
-            
-            # Check for failures
-            height = self.env.root_states[:, 2]
-            self.episode_failed = self.episode_failed | (height < 0.2)
-            
-            step_count += 1
+                obs = self.env.get_observations()
+        
+        # Final summary for this switch
+        final_data = self.metrics['motion_switch'][switch_key]
+        print(f"  Completed evaluation: {final_data['total']} episodes, {final_data['success']} successful, "
+              f"{len(final_data['mpbpe'])} error measurements")
     
     def get_summary(self):
         """Get summary of all metrics"""
@@ -442,7 +495,7 @@ def eval_main(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     
     # Override configs based on evaluation mode
-    env_cfg.env.num_envs = 1
+    env_cfg.env.num_envs = 100
     env_cfg.env.episode_length_s = 30
     env_cfg.noise.add_noise = False
     
@@ -577,8 +630,8 @@ def eval_main(args):
         print("\n" + "="*50)
         print("Evaluating motion switches")
         print("="*50)
-        for i, motion1 in enumerate(motion_names):
-            for motion2 in motion_names[i+1:]:
+        for motion1 in motion_names:
+            for motion2 in motion_names:
                 evaluator.evaluate_motion_switch(motion1, motion2, num_episodes=args.num_episodes)
     
     # Get summary
