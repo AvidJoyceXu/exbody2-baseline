@@ -43,132 +43,115 @@ class MotionEvaluator:
         self.switch_info = {}  # Track motion switches: {env_id: [(motion1, motion2, switch_step)]}
         
     def compute_window_errors(self, env_ids=None):
-        """Compute window-based position and velocity errors"""
+        """
+        Compute window-based position and velocity errors following motion_switching_eval.py logic.
+        
+        Key differences from original implementation:
+        1. Uses rg_pos_t and body_vel_t (target bodies) instead of rg_pos/body_vel (all bodies)
+        2. Computes reference positions relative to root: rg_pos_t - rg_pos_t[:,0:1]
+        3. Uses quat_rotate_inverse for velocity conversion (handles xyzw quaternion format)
+        4. Accounts for environment origins via offset parameter
+        """
         if env_ids is None:
             env_ids = torch.arange(self.env.num_envs, device=self.device)
         
         if len(env_ids) == 0:
             return None, None
         
-        # Get current motion times
+        window_length = self.window_length  # 8 frames before and after
+        
+        # Get current motion times and IDs
         motion_times = self.env._motion_times[env_ids]
         motion_ids = self.env._motion_ids[env_ids]
         
         # Create time window: [current - window_length, current + window_length]
-        time_offsets = torch.arange(-self.window_length, self.window_length, device=self.device, dtype=torch.float32) * self.env.dt
-        motion_time_window = (motion_times.unsqueeze(1) + time_offsets.unsqueeze(0)).reshape(-1)
+        # Similar to: ((episode_length_buf - source_episode_length - transition_buf).unsqueeze(1) + 
+        #              torch.arange(-window_length, window_length)).unsqueeze(0) * dt + motion_start_times
+        time_offsets = torch.arange(-window_length, window_length, device=self.device, dtype=torch.float32)
+        motion_time_window = (motion_times.unsqueeze(1) + time_offsets.unsqueeze(0) * self.env.dt).reshape(-1)
+        
+        # Prepare motion IDs for window (repeat for each time offset)
+        motion_ids_window = motion_ids.unsqueeze(1).repeat(1, window_length * 2).reshape(-1)
+        
+        # Get environment origins for offset (account for multiple environments)
+        # In motion_switching_eval: offset_window = env_origins.unsqueeze(1).repeat(1, window_length*2, 1).reshape(-1, 3)
+        if hasattr(self.env, 'env_origins'):
+            offset_window = self.env.env_origins[env_ids].unsqueeze(1).repeat(1, window_length * 2, 1).reshape(-1, 3)
+        else:
+            offset_window = None
         
         # Get reference motion states for the window
-        motion_ids_window = motion_ids.unsqueeze(1).repeat(1, self.window_length * 2).reshape(-1)
-        motion_state_window = self.env._motion_lib.get_motion_state(motion_ids_window, motion_time_window)
+        motion_state_window = self.env._motion_lib.get_motion_state(
+            motion_ids_window, motion_time_window, offset=offset_window
+        )
         
-        # Get reference body positions and velocities (all bodies)
-        # MotionLibRobotWTS returns rg_pos as [num_samples, num_bodies, 3]
-        ref_rg_pos = motion_state_window['rg_pos']  # [num_samples, num_bodies, 3]
-        ref_root_pos = motion_state_window['root_pos']  # [num_samples, 3]
+        # Use rg_pos_t (target bodies) instead of rg_pos (all bodies)
+        # NOTE: Currently we disable the rg_pos_t (+ extended bodies) and use rg_pos (all bodies)
+        ref_rg_pos_t = motion_state_window['rg_pos']  # [num_samples, num_target_bodies, 3
+        
         ref_root_rot = motion_state_window['root_rot']  # [num_samples, 4]
         
-        # Try to get body velocities - check different possible keys
-        if 'body_vel_t' in motion_state_window:
-            ref_body_vel = motion_state_window['body_vel_t']
-        elif 'body_vel' in motion_state_window:
-            ref_body_vel = motion_state_window['body_vel']
-        else:
-            # Fallback: use root velocity for all bodies
-            ref_body_vel = ref_root_pos.unsqueeze(1).repeat(1, ref_rg_pos.shape[1], 1)
+        # Get body velocities - prefer body_vel_t (target bodies)
+        ref_body_vel_t = motion_state_window['body_vel']
         
-        # Reshape to [num_envs, window_length*2, num_bodies, 3]
-        # ref_rg_pos and ref_body_vel are already [num_samples, num_bodies, 3]
-        num_samples_expected = len(env_ids) * self.window_length * 2
+        num_target_bodies = ref_rg_pos_t.shape[1]
         
-        # Ensure we have the correct number of samples
-        if ref_rg_pos.shape[0] != num_samples_expected:
-            # This shouldn't happen, but handle it gracefully
-            actual_samples = min(ref_rg_pos.shape[0], num_samples_expected)
-            ref_rg_pos = ref_rg_pos[:actual_samples]
-            ref_root_pos = ref_root_pos[:actual_samples]
-            ref_root_rot = ref_root_rot[:actual_samples]
-            ref_body_vel = ref_body_vel[:actual_samples]
-            num_samples_expected = actual_samples
+        # Reshape to [num_envs, window_length*2, num_target_bodies, 3]
+        ref_rg_pos_t = ref_rg_pos_t.view(len(env_ids), window_length * 2, num_target_bodies, 3)
+        ref_root_rot = ref_root_rot.view(len(env_ids), window_length * 2, 4)
+        ref_body_vel_t = ref_body_vel_t.view(len(env_ids), window_length * 2, num_target_bodies, 3)
         
-        num_bodies_pos = ref_rg_pos.shape[1]
-        num_bodies_vel = ref_body_vel.shape[1]
-        num_bodies = max(num_bodies_pos, num_bodies_vel)  # Use the larger number
+        # Compute reference positions relative to root (index 0)
+        # This is the key difference: rg_pos_t - rg_pos_t[:,0:1] makes positions relative to root
+        ref_rg_pos_relative = ref_rg_pos_t - ref_rg_pos_t[:, :, 0:1, :]  # [num_envs, window_length*2, num_target_bodies, 3]
         
-        # Reshape: [num_samples, num_bodies, 3] -> [num_envs, window_length*2, num_bodies, 3]
-        ref_rg_pos = ref_rg_pos.view(len(env_ids), self.window_length * 2, num_bodies_pos, 3)
-        ref_root_pos = ref_root_pos.view(len(env_ids), self.window_length * 2, 3)
-        ref_root_rot = ref_root_rot.view(len(env_ids), self.window_length * 2, 4)
-        ref_body_vel = ref_body_vel.view(len(env_ids), self.window_length * 2, num_bodies_vel, 3)
-        
-        # Pad or trim body positions and velocities to match num_bodies
-        if num_bodies_pos < num_bodies:
-            padding = torch.zeros(len(env_ids), self.window_length * 2, num_bodies - num_bodies_pos, 3,
-                                device=ref_rg_pos.device, dtype=ref_rg_pos.dtype)
-            ref_rg_pos = torch.cat([ref_rg_pos, padding], dim=2)
-        elif num_bodies_pos > num_bodies:
-            ref_rg_pos = ref_rg_pos[:, :, :num_bodies]
-        
-        if num_bodies_vel < num_bodies:
-            padding = torch.zeros(len(env_ids), self.window_length * 2, num_bodies - num_bodies_vel, 3,
-                                device=ref_body_vel.device, dtype=ref_body_vel.dtype)
-            ref_body_vel = torch.cat([ref_body_vel, padding], dim=2)
-        elif num_bodies_vel > num_bodies:
-            ref_body_vel = ref_body_vel[:, :, :num_bodies]
+        # Convert reference positions to local frame using quat_rotate_inverse
+        # Similar to motion_switching_eval: quat_rotate_inverse(root_rot, rg_pos_relative, w_last=True)
+        ref_local_pos_window = quat_rotate_inverse(
+            ref_root_rot.unsqueeze(2).repeat(1, 1, num_target_bodies, 1).reshape(-1, 4),
+            ref_rg_pos_relative.reshape(-1, 3)
+        ).reshape(len(env_ids), window_length * 2, num_target_bodies, 3)
         
         # Get current robot body positions and velocities
         robot_root_pos = self.env.root_states[env_ids, :3]  # [num_envs, 3]
         robot_root_rot = self.env.root_states[env_ids, 3:7]  # [num_envs, 4]
         
-        # Get robot body positions - need to match number of bodies
-        num_robot_bodies = min(self.env.rigid_body_states.shape[1], num_bodies)
+        # Get robot body positions - match number of target bodies
+        # Use rigid_body_states or similar structure
+        assert hasattr(self.env, 'rigid_body_states'), "rigid_body_states not found in environment"
+        num_robot_bodies = min(self.env.rigid_body_states.shape[1], num_target_bodies)
         robot_body_pos = self.env.rigid_body_states[env_ids, :num_robot_bodies, :3]  # [num_envs, num_robot_bodies, 3]
         robot_body_vel = self.env.rigid_body_states[env_ids, :num_robot_bodies, 7:10]  # [num_envs, num_robot_bodies, 3]
         
-        # Pad or trim to match reference
-        if num_robot_bodies < num_bodies:
-            # Pad with zeros
-            padding = torch.zeros(len(env_ids), num_bodies - num_robot_bodies, 3, device=self.device)
-            robot_body_pos = torch.cat([robot_body_pos, padding], dim=1)
-            robot_body_vel = torch.cat([robot_body_vel, padding], dim=1)
-        elif num_robot_bodies > num_bodies:
-            # Trim
-            robot_body_pos = robot_body_pos[:, :num_bodies]
-            robot_body_vel = robot_body_vel[:, :num_bodies]
-        
-        # Convert reference positions to local frame (relative to root)
-        ref_local_pos = global_to_local(
-            ref_root_rot.view(-1, 4),
-            (ref_rg_pos - ref_root_pos.unsqueeze(2)).view(-1, num_bodies, 3),
-            ref_root_pos.view(-1, 3)
-        ).view(len(env_ids), self.window_length * 2, num_bodies, 3)
+        # Compute robot positions relative to root
+        robot_body_pos_relative = robot_body_pos - robot_root_pos.unsqueeze(1)  # [num_envs, num_target_bodies, 3]
         
         # Convert robot positions to local frame
-        robot_local_pos = global_to_local(
-            robot_root_rot,
-            robot_body_pos - robot_root_pos.unsqueeze(1),
-            robot_root_pos
-        )  # [num_envs, num_bodies, 3]
+        robot_local_pos = quat_rotate_inverse(
+            robot_root_rot.unsqueeze(1).repeat(1, num_target_bodies, 1).reshape(-1, 4),
+            robot_body_pos_relative.reshape(-1, 3)
+        ).reshape(len(env_ids), num_target_bodies, 3)
+        
+        # Convert reference velocities to local frame
+        ref_local_vel_window = quat_rotate_inverse(
+            ref_root_rot.unsqueeze(2).repeat(1, 1, num_target_bodies, 1).reshape(-1, 4),
+            ref_body_vel_t.reshape(-1, 3)
+        ).reshape(len(env_ids), window_length * 2, num_target_bodies, 3)
         
         # Convert robot velocities to local frame
         robot_local_vel = quat_rotate_inverse(
-            robot_root_rot.unsqueeze(1).repeat(1, num_bodies, 1).view(-1, 4),
-            robot_body_vel.view(-1, 3)
-        ).view(len(env_ids), num_bodies, 3)
+            robot_root_rot.unsqueeze(1).repeat(1, num_target_bodies, 1).reshape(-1, 4),
+            robot_body_vel.reshape(-1, 3)
+        ).reshape(len(env_ids), num_target_bodies, 3)
         
-        # Convert reference velocities to local frame
-        ref_local_vel = quat_rotate_inverse(
-            ref_root_rot.view(-1, 4).unsqueeze(1).repeat(1, num_bodies, 1).view(-1, 4),
-            ref_body_vel.view(-1, 3)
-        ).view(len(env_ids), self.window_length * 2, num_bodies, 3)
+        # Compute position differences: [num_envs, window_length*2, num_target_bodies, 3]
+        pos_diff = robot_local_pos.unsqueeze(1) - ref_local_pos_window
         
-        # Compute position differences: [num_envs, window_length*2, num_bodies, 3]
-        pos_diff = robot_local_pos.unsqueeze(1) - ref_local_pos
-        
-        # Compute velocity differences: [num_envs, window_length*2, num_bodies, 3]
-        vel_diff = robot_local_vel.unsqueeze(1) - ref_local_vel
+        # Compute velocity differences: [num_envs, window_length*2, num_target_bodies, 3]
+        vel_diff = robot_local_vel.unsqueeze(1) - ref_local_vel_window
         
         # Compute mean error per body, then min across window: [num_envs]
+        # Same as motion_switching_eval: (robot_pos - ref_pos).norm(dim=-1).mean(dim=-1).min(dim=-1).values
         pos_error_per_window = pos_diff.norm(dim=-1).mean(dim=-1)  # [num_envs, window_length*2]
         vel_error_per_window = vel_diff.norm(dim=-1).mean(dim=-1)  # [num_envs, window_length*2]
         
