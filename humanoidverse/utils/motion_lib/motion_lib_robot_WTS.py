@@ -101,7 +101,7 @@ class MotionLibBase():
         self.mesh_parsers = None
         self.has_action = False
         self.has_contact_mask: Optional[str] = None
-        skeleton_file = self.m_cfg.asset.file
+        skeleton_file = self.m_cfg.asset.mjcf_file
         self.skeleton_tree = SkeletonTree.from_mjcf(skeleton_file)
 
         

@@ -149,7 +149,8 @@ class X2MimicPrivCfg( LeggedRobotCfg ):
         clip_actions = 10
 
     class asset( LeggedRobotCfg.asset ):
-        file = f'{LEGGED_GYM_ROOT_DIR}/resources/robots/x2/x2_mc_kungfu.xml'
+        urdf_file = f'{LEGGED_GYM_ROOT_DIR}/resources/robots/x2/urdf/x2_t2_jw_collision_kungfu.urdf'
+        mjcf_file = f'{LEGGED_GYM_ROOT_DIR}/resources/robots/x2/x2_mc_kungfu.xml'
         torso_name = "waist_roll_link"  # aligned with x2_t2_23dof.yaml
         foot_name = "ankle_roll"
         hip_names = ["left_hip_yaw_joint", "right_hip_yaw_joint"]

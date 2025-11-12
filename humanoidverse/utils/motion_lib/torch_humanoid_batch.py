@@ -43,14 +43,18 @@ class Humanoid_Batch:
         self.cfg = cfg
         # self.asset_root = Path(cfg.asset.assetRoot)
         # self.asset_file = cfg.asset.assetFileName
-        self.mjcf_file = cfg.asset.file
+        self.mjcf_file = cfg.asset.mjcf_file
         
         parser = XMLParser(remove_blank_text=True)
         tree = parse(BytesIO(open(self.mjcf_file, "rb").read()), parser=parser,)
         self.dof_axis = []
 
         joints = sorted([j.attrib['name'] for j in tree.getroot().find("worldbody").findall('.//joint')])
-        motors = sorted([m.attrib['name'] for m in tree.getroot().find("actuator").getchildren()])
+        actuator = tree.getroot().find("actuator")
+        if actuator is not None:
+            motors = sorted([m.attrib['name'] for m in actuator.findall('motor') if 'name' in m.attrib])
+        else:
+            motors = []
         
         assert len(motors) > 0, "No motors found in the mjcf file"
         
