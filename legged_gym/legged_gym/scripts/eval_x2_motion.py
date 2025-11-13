@@ -212,6 +212,8 @@ class MotionEvaluator:
         self.env._motion_ids[env_ids] = motion_id
         self.env.update_motion_ids(env_ids)
         self.env.reset_idx(env_ids)
+        self.env.compute_observations()
+
         obs = self.env.get_observations()
         
         # Track episode state for each environment
@@ -264,7 +266,7 @@ class MotionEvaluator:
             
             # Check for failures (falling) - but don't reset yet
             height = self.env.root_states[:, 2]
-            fall_mask = height < 0.2
+            fall_mask = height < 0.5
             episode_failed[fall_mask] = True
             
             # Handle resets: only reset when motion is completed
@@ -287,6 +289,8 @@ class MotionEvaluator:
                 self.env._motion_ids[reset_envs] = motion_id
                 self.env.update_motion_ids(reset_envs)
                 self.env.reset_idx(reset_envs)
+                self.env.compute_observations()
+
                 obs = self.env.get_observations()
         
         # Final summary for this motion
@@ -342,6 +346,7 @@ class MotionEvaluator:
         self.env._motion_ids[env_ids] = motion1_id
         self.env.update_motion_ids(env_ids)
         self.env.reset_idx(env_ids)
+        self.env.compute_observations()
         obs = self.env.get_observations()
         
         # Track episode state for each environment
@@ -420,7 +425,7 @@ class MotionEvaluator:
             
             # Check for failures (falling) - but don't reset yet
             height = self.env.root_states[:, 2]
-            fall_mask = (height < 0.2)
+            fall_mask = (height < 0.5)
             episode_failed[fall_mask] = True
             
             # Handle resets: only reset when motion2 is completed
@@ -445,6 +450,7 @@ class MotionEvaluator:
                 self.env._motion_ids[reset_envs] = motion1_id
                 self.env.update_motion_ids(reset_envs)
                 self.env.reset_idx(reset_envs)
+                self.env.compute_observations()
                 obs = self.env.get_observations()
         
         # Final summary for this switch
@@ -495,7 +501,7 @@ def eval_main(args):
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
     
     # Override configs based on evaluation mode
-    env_cfg.env.num_envs = 100
+    env_cfg.env.num_envs = 1
     env_cfg.env.episode_length_s = 30
     env_cfg.noise.add_noise = False
     
@@ -686,7 +692,7 @@ if __name__ == '__main__':
                 self.sim_device_id = 0
             
             # Set defaults for other required args
-            self.headless = True
+            self.headless = False
             self.compute_device_id = self.sim_device_id
             
             # Attributes needed by update_cfg_from_args

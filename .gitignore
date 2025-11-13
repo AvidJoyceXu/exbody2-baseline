@@ -7,3 +7,5 @@ fbx/
 *npy
 *.pkl
 *.yaml
+humanoidverse/envs
+*.sh

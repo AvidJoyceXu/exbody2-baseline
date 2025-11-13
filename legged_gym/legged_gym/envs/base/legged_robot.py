@@ -970,12 +970,14 @@ class LeggedRobot(BaseTask):
             torch.cuda.synchronize()
         
         robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        
+        # robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file)
+
         # Add GPU synchronization after first asset load
         if self.device != 'cpu':
             torch.cuda.synchronize()
         
         urdf_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
+        # urdf_asset = self.gym.load_asset(self.sim, asset_root, asset_file)
         
         # Add GPU synchronization after second asset load
         if self.device != 'cpu':
@@ -1052,6 +1054,11 @@ class LeggedRobot(BaseTask):
             body_props, mass_params = self._process_rigid_body_props(body_props, i)
             self.gym.set_actor_rigid_body_properties(env_handle, anymal_handle, body_props, recomputeInertia=True)
             self.envs.append(env_handle)
+            # Print the mass for each rigid body
+            # for j in range(len(body_props)):
+            #     print(f"Body {j} mass: {body_props[j].mass}")
+            # import ipdb; ipdb.set_trace()
+
             self.actor_handles.append(anymal_handle)
             
             self.attach_camera(i, env_handle, anymal_handle)
